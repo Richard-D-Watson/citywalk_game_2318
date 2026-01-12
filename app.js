@@ -441,18 +441,20 @@ function loadState(){
     const parsed = JSON.parse(raw);
 
     // Backward-compat migration:
-    // - older versions stored full photo DataURL in slot.fileDataUrl (can exceed localStorage quota).
-    // - new version stores full image Blob in IndexedDB, and only keeps a small thumbnail DataURL in localStorage.
+    // Earlier versions stored photo previews (DataURL) inside localStorage (slot.fileDataUrl / slot.fileThumbDataUrl).
+    // This can easily exceed browser quota and break progress saving.
+    // Newer versions store photos as Blobs in IndexedDB and keep localStorage tiny.
+    // To *avoid any upload/save failures*, we proactively strip any legacy DataURLs from the state.
     if(parsed?.scenes){
       for(const sceneId of Object.keys(parsed.scenes)){
         const sc = parsed.scenes[sceneId];
         if(!sc?.tasks) continue;
         for(const taskId of Object.keys(sc.tasks)){
           const slot = sc.tasks[taskId];
-          if(slot && slot.fileDataUrl && !slot.fileThumbDataUrl){
-            // keep old value as thumbnail so existing saves still preview
-            slot.fileThumbDataUrl = slot.fileDataUrl;
-          }
+          if(!slot) continue;
+          // remove heavy fields to prevent quota issues
+          if(slot.fileThumbDataUrl) delete slot.fileThumbDataUrl;
+          if(slot.fileDataUrl) delete slot.fileDataUrl;
         }
       }
     }
@@ -599,6 +601,7 @@ function closeSheet(){
 
 /* Render */
 function render(){
+  if(typeof revokePreviewObjectUrls === 'function') revokePreviewObjectUrls();
   const state = initStateIfNeeded();
   computeUnlocks(state);
   saveState(state);
@@ -820,6 +823,7 @@ function renderScene(state, sceneId){
   };
 
   renderTasks(state, scene);
+  hydrateImagePreviews(document.getElementById('app'));
 
   document.getElementById("nextBtn").onclick = ()=>{
     const idx = scenes.findIndex(s=>s.id===scene.id);
@@ -893,17 +897,20 @@ function renderTasks(state, scene){
         const input = card.querySelector('input[type="file"]');
         const file = input?.files?.[0];
         if(!file){ feedbackEl.textContent = "请先选择一张图片。"; return; }
-        // Store full image as Blob in IndexedDB (quota-friendly) and keep only a small thumbnail in localStorage.
-if(slot.fileImageId){ await deleteImageBlob(slot.fileImageId); }
-const imageId = makeImageId(taskId);
-await putImageBlob(imageId, file);
 
-fileDataUrl = await createThumbnailDataUrl(file);
-userValue = file.name || "image";
+        // Store image Blob in IndexedDB. Keep localStorage state small to avoid quota failures.
+        if(slot.fileImageId){ await deleteImageBlob(slot.fileImageId); }
+        const imageId = makeImageId(taskId);
+        const stored = await putImageBlob(imageId, file);
+        if(stored){
+          slot.fileImageId = imageId;
+        }else{
+          // If IndexedDB fails, we still allow completing the task (but preview won't persist).
+          slot.fileImageId = null;
+        }
 
-// persist references
-slot.fileImageId = imageId;
-slot.fileThumbDataUrl = fileDataUrl;
+        fileDataUrl = null;
+        userValue = file.name || "image";
       } else if(task.type === "choice") {
         const checked = card.querySelector('input[type="radio"]:checked');
         userValue = checked ? checked.value : "";
@@ -917,8 +924,9 @@ slot.fileThumbDataUrl = fileDataUrl;
       if(ok) {
         slot.done = true;
         slot.value = userValue;
-        slot.fileThumbDataUrl = fileDataUrl;
-        slot.fileDataUrl = fileDataUrl; // backward compat (thumbnail)
+        // Previews are not stored in localStorage to avoid quota issues.
+        slot.fileThumbDataUrl = null;
+        slot.fileDataUrl = null;
         slot.updatedAt = now();
         st.scenes[scene.id].tasks[taskId] = slot;
 
@@ -952,15 +960,20 @@ slot.fileThumbDataUrl = fileDataUrl;
 
 function renderTaskInput(task, saved){
   if(task.type === "upload") {
-    const previewSrc = saved.fileThumbDataUrl || saved.fileDataUrl;
-    const hasPreview = !!previewSrc;
+    const legacyPreviewSrc = saved.fileThumbDataUrl || saved.fileDataUrl;
+    const hasLegacyPreview = !!legacyPreviewSrc;
+    const hasBlob = !!saved.fileImageId;
     return `
       <input class="input" type="file" accept="image/*" />
-      ${hasPreview ? `
+      ${hasBlob ? `
         <div class="previewGrid" style="margin-top:10px">
-          <img src="${escapeAttr(previewSrc)}" alt="预览" />
+          <img data-image-id="${escapeAttr(saved.fileImageId)}" alt="预览" />
         </div>
-      `: `<div class="muted">提示：选择图片后点击提交即可完成。</div>`}
+      ` : (hasLegacyPreview ? `
+        <div class="previewGrid" style="margin-top:10px">
+          <img src="${escapeAttr(legacyPreviewSrc)}" alt="预览" />
+        </div>
+      `: `<div class="muted">提示：选择图片后点击提交即可完成。</div>`)}
     `;
   }
   if(task.type === "choice") {
@@ -1146,7 +1159,8 @@ function renderSummary(state){
               const slot = st?.tasks?.[t.id];
               const ok = slot?.done;
               const value = slot?.value;
-              const img = slot?.fileThumbDataUrl || slot?.fileDataUrl;
+              const imgData = slot?.fileThumbDataUrl || slot?.fileDataUrl;
+              const imgId = slot?.fileImageId;
               return `
                 <div style="padding:10px 10px; border:1px solid #e5e7eb; border-radius:14px; background:#fff; margin-top:8px">
                   <div class="row spaceBetween">
@@ -1154,9 +1168,9 @@ function renderSummary(state){
                     <div class="taskStatus ${ok ? "done": ""}">${ok ? "完成 ✅" : "未完成"}</div>
                   </div>
                   ${ok && t.type !== "upload" ? `<div class="muted" style="margin-top:6px">你的答案：${escapeHtml(String(value ?? ""))}</div>` : ``}
-                  ${ok && t.type === "upload" && img ? `
+                  ${ok && t.type === "upload" && (imgId || imgData) ? `
                     <div class="previewGrid" style="margin-top:8px">
-                      <img src="${escapeAttr(img)}" alt="上传照片" />
+                      ${imgId ? `<img data-image-id="${escapeAttr(imgId)}" alt="上传照片" />` : `<img src="${escapeAttr(imgData)}" alt="上传照片" />`}
                     </div>
                   ` : (t.type==="upload" ? `<div class="muted" style="margin-top:6px">（本任务需要上传照片）</div>` : ``)}
                 </div>
@@ -1182,9 +1196,53 @@ function renderSummary(state){
     location.hash = "#/map";
     render();
   };
+
+  hydrateImagePreviews(document.getElementById('app'));
 }
 
 
+
+// ===== Preview helpers (ObjectURL) =====
+let __previewObjectUrls = [];
+function revokePreviewObjectUrls(){
+  for(const u of __previewObjectUrls){
+    try{ URL.revokeObjectURL(u); }catch(e){}
+  }
+  __previewObjectUrls = [];
+}
+
+async function getImageBlob(id){
+  if(!id) return null;
+  try{
+    const db = await openImageDB();
+    const res = await new Promise((resolve, reject)=>{
+      const tx = db.transaction(IMAGE_STORE, "readonly");
+      tx.onerror = ()=> reject(tx.error);
+      const req = tx.objectStore(IMAGE_STORE).get(id);
+      req.onsuccess = ()=> resolve(req.result || null);
+      req.onerror = ()=> reject(req.error);
+    });
+    db.close();
+    return res?.blob || null;
+  }catch(e){
+    return null;
+  }
+}
+
+function hydrateImagePreviews(root=document){
+  const imgs = Array.from(root.querySelectorAll('img[data-image-id]'));
+  imgs.forEach(async (img)=>{
+    const id = img.getAttribute('data-image-id');
+    if(!id) return;
+    const blob = await getImageBlob(id);
+    if(!blob) return;
+    const url = URL.createObjectURL(blob);
+    __previewObjectUrls.push(url);
+    img.src = url;
+  });
+}
+
+// ===== End preview helpers =====
 // ===== Image storage helpers (IndexedDB) =====
 // We store full image Blobs in IndexedDB to avoid exceeding localStorage quota.
 // In localStorage we only keep a small thumbnail DataURL for preview.
@@ -1217,9 +1275,11 @@ async function putImageBlob(id, fileOrBlob){
       tx.objectStore(IMAGE_STORE).put({ id, blob: fileOrBlob });
     });
     db.close();
+    return true;
   }catch(e){
     // If IndexedDB fails, we still fall back to thumbnail-only storage.
-    console.warn("IndexedDB put failed; falling back to thumbnail-only storage.", e);
+    console.warn("IndexedDB put failed; falling back to no-persist preview.", e);
+    return false;
   }
 }
 
