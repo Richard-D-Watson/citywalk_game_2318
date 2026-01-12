@@ -437,9 +437,39 @@ function now(){ return Date.now(); }
 function loadState(){
   const raw = localStorage.getItem(STORAGE_KEY);
   if(!raw) return { startedAt:null, endedAt:null, scenes:{} };
-  try{ return JSON.parse(raw); }catch(e){ return { startedAt:null, endedAt:null, scenes:{} }; }
+  try{
+    const parsed = JSON.parse(raw);
+
+    // Backward-compat migration:
+    // - older versions stored full photo DataURL in slot.fileDataUrl (can exceed localStorage quota).
+    // - new version stores full image Blob in IndexedDB, and only keeps a small thumbnail DataURL in localStorage.
+    if(parsed?.scenes){
+      for(const sceneId of Object.keys(parsed.scenes)){
+        const sc = parsed.scenes[sceneId];
+        if(!sc?.tasks) continue;
+        for(const taskId of Object.keys(sc.tasks)){
+          const slot = sc.tasks[taskId];
+          if(slot && slot.fileDataUrl && !slot.fileThumbDataUrl){
+            // keep old value as thumbnail so existing saves still preview
+            slot.fileThumbDataUrl = slot.fileDataUrl;
+          }
+        }
+      }
+    }
+    return parsed;
+  }catch(e){
+    return { startedAt:null, endedAt:null, scenes:{} };
+  }
 }
-function saveState(s){ localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+function saveState(s){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    return true;
+  }catch(e){
+    console.error("Failed to save state (possibly storage quota exceeded).", e);
+    return false;
+  }
+}
 
 function initStateIfNeeded(){
   const s = loadState();
@@ -449,12 +479,17 @@ function initStateIfNeeded(){
       s.scenes[scene.id] = {
         unlocked: scene.unlock?.type === "always",
         tasks: {},
-        bonus: { done:false, updatedAt:null }
+        bonus: { done:false, updatedAt:null, values:{} }
       };
+    }
+    // backward compatible: ensure bonus container exists
+    if(!s.scenes[scene.id].bonus) s.scenes[scene.id].bonus = { done:false, updatedAt:null, values:{} };
+    if(typeof s.scenes[scene.id].bonus.values !== "object" || s.scenes[scene.id].bonus.values === null){
+      s.scenes[scene.id].bonus.values = {};
     }
     for(const t of (scene.tasks||[])){
       if(!s.scenes[scene.id].tasks[t.id]){
-        s.scenes[scene.id].tasks[t.id] = { done:false, value:null, fileDataUrl:null, updatedAt:null };
+        s.scenes[scene.id].tasks[t.id] = { done:false, value:null, fileThumbDataUrl:null, fileImageId:null, fileDataUrl:null, updatedAt:null };
       }
     }
   }
@@ -833,12 +868,19 @@ function renderTasks(state, scene){
     const task = (scene.tasks||[]).find(t=>t.id===taskId);
     const feedbackEl = card.querySelector('[data-role="feedback"]');
 
-    card.querySelector('[data-action="clear"]').onclick = ()=>{
-      const st = loadState();
-      st.scenes[scene.id].tasks[taskId] = { done:false, value:null, fileDataUrl:null, updatedAt: now() };
-      saveState(st);
-      render();
-    };
+    card.querySelector('[data-action="clear"]').onclick = async ()=>{
+  const st = loadState();
+  const prev = st.scenes[scene.id].tasks[taskId];
+  if(prev?.fileImageId){
+    await deleteImageBlob(prev.fileImageId);
+  }
+  st.scenes[scene.id].tasks[taskId] = { done:false, value:null, fileThumbDataUrl:null, fileImageId:null, fileDataUrl:null, updatedAt: now() };
+  const okSave = saveState(st);
+  if(!okSave){
+    alert("保存失败：可能是浏览器存储空间不足。建议删除部分任务照片后重试，或在浏览器设置中清理站点数据后重新开始。");
+  }
+  render();
+};
 
     card.querySelector('[data-action="submit"]').onclick = async ()=>{
       const st = loadState();
@@ -851,8 +893,17 @@ function renderTasks(state, scene){
         const input = card.querySelector('input[type="file"]');
         const file = input?.files?.[0];
         if(!file){ feedbackEl.textContent = "请先选择一张图片。"; return; }
-        fileDataUrl = await readFileAsDataURL(file);
-        userValue = file.name || "image";
+        // Store full image as Blob in IndexedDB (quota-friendly) and keep only a small thumbnail in localStorage.
+if(slot.fileImageId){ await deleteImageBlob(slot.fileImageId); }
+const imageId = makeImageId(taskId);
+await putImageBlob(imageId, file);
+
+fileDataUrl = await createThumbnailDataUrl(file);
+userValue = file.name || "image";
+
+// persist references
+slot.fileImageId = imageId;
+slot.fileThumbDataUrl = fileDataUrl;
       } else if(task.type === "choice") {
         const checked = card.querySelector('input[type="radio"]:checked');
         userValue = checked ? checked.value : "";
@@ -866,12 +917,17 @@ function renderTasks(state, scene){
       if(ok) {
         slot.done = true;
         slot.value = userValue;
-        slot.fileDataUrl = fileDataUrl;
+        slot.fileThumbDataUrl = fileDataUrl;
+        slot.fileDataUrl = fileDataUrl; // backward compat (thumbnail)
         slot.updatedAt = now();
         st.scenes[scene.id].tasks[taskId] = slot;
 
         computeUnlocks(st);
-        saveState(st);
+        const okSave = saveState(st);
+        if(!okSave){
+          feedbackEl.textContent = "完成 ✅（但保存失败：可能是浏览器存储空间不足）";
+          return;
+        }
 
         feedbackEl.textContent = task.feedback?.correctText || "完成 ✅";
 
@@ -896,12 +952,13 @@ function renderTasks(state, scene){
 
 function renderTaskInput(task, saved){
   if(task.type === "upload") {
-    const hasPreview = !!saved.fileDataUrl;
+    const previewSrc = saved.fileThumbDataUrl || saved.fileDataUrl;
+    const hasPreview = !!previewSrc;
     return `
       <input class="input" type="file" accept="image/*" />
       ${hasPreview ? `
         <div class="previewGrid" style="margin-top:10px">
-          <img src="${escapeAttr(saved.fileDataUrl)}" alt="预览" />
+          <img src="${escapeAttr(previewSrc)}" alt="预览" />
         </div>
       `: `<div class="muted">提示：选择图片后点击提交即可完成。</div>`}
     `;
@@ -928,6 +985,16 @@ function renderTaskInput(task, saved){
   return `<input class="input" type="text" inputmode="${escapeAttr(mode)}" placeholder="${escapeAttr(placeholder)}" value="${escapeAttr(saved.value || "")}" />`;
 }
 
+function renderBonusTaskInput(bt, savedValue){
+  if(bt.type !== "input") return "";
+  const mode = bt.input?.inputMode || "text";
+  const placeholder = bt.input?.placeholder || "请输入";
+  return `
+    <div style="height:10px"></div>
+    <input class="input" id="bonus-input-${escapeAttr(bt.id)}" type="text" inputmode="${escapeAttr(mode)}" placeholder="${escapeAttr(placeholder)}" value="${escapeAttr(savedValue || "")}" />
+  `;
+}
+
 function renderBonus(state, sceneId){
   const app = document.getElementById("app");
   const scene = scenes.find(s=>s.id===sceneId);
@@ -939,6 +1006,7 @@ function renderBonus(state, sceneId){
   if(!bonusTasks.length){ location.hash = `#/scene/${scene.id}`; return; }
 
   const alreadyDone = state.scenes[scene.id]?.bonus?.done;
+  const savedBonusValues = state.scenes[scene.id]?.bonus?.values || {};
 
   app.innerHTML = `
     <div class="row spaceBetween" style="margin-bottom:12px">
@@ -967,6 +1035,7 @@ function renderBonus(state, sceneId){
                 ${bt.promptImageUrls.map(u=>`<img src="${escapeAttr(u)}" alt="" />`).join("")}
               </div>
             ` : ``}
+            ${renderBonusTaskInput(bt, savedBonusValues?.[bt.id])}
           </div>
         `;
       }).join("<div style='height:10px'></div>")}
@@ -976,6 +1045,7 @@ function renderBonus(state, sceneId){
         <button class="btn btnPrimary" id="bonusDoneBtn">${alreadyDone ? "已完成" : "我已完成/领取 ✅"}</button>
         <button class="btn btnGhost" id="bonusLaterBtn">稍后再说</button>
       </div>
+      <div id="bonusFeedback" class="muted" style="margin-top:10px"></div>
       <p class="muted" style="margin-top:10px">备注：挑战/奖励页不影响解锁进度噢～</p>
     </div>
   `;
@@ -985,7 +1055,21 @@ function renderBonus(state, sceneId){
   document.getElementById("bonusLaterBtn").onclick = ()=>{ location.hash = "#/map"; };
   document.getElementById("bonusDoneBtn").onclick = ()=>{
     const st = loadState();
-    st.scenes[scene.id].bonus = { done:true, updatedAt: now() };
+    // collect optional bonus input values
+    const values = (st.scenes[scene.id].bonus && typeof st.scenes[scene.id].bonus.values === "object") ? st.scenes[scene.id].bonus.values : {};
+    for(const bt of (scene.bonusTasks || [])){
+      if(bt.type !== "input") continue;
+      const el = document.getElementById(`bonus-input-${bt.id}`);
+      const v = el ? (el.value || "").toString() : "";
+      const required = !!bt.validation?.required;
+      if(required && !v.trim()){
+        const fb = document.getElementById("bonusFeedback");
+        if(fb) fb.textContent = "请先填写内容再完成～";
+        return;
+      }
+      values[bt.id] = v;
+    }
+    st.scenes[scene.id].bonus = { done:true, updatedAt: now(), values };
     saveState(st);
     location.hash = "#/map";
   };
@@ -1062,7 +1146,7 @@ function renderSummary(state){
               const slot = st?.tasks?.[t.id];
               const ok = slot?.done;
               const value = slot?.value;
-              const img = slot?.fileDataUrl;
+              const img = slot?.fileThumbDataUrl || slot?.fileDataUrl;
               return `
                 <div style="padding:10px 10px; border:1px solid #e5e7eb; border-radius:14px; background:#fff; margin-top:8px">
                   <div class="row spaceBetween">
@@ -1099,6 +1183,112 @@ function renderSummary(state){
     render();
   };
 }
+
+
+// ===== Image storage helpers (IndexedDB) =====
+// We store full image Blobs in IndexedDB to avoid exceeding localStorage quota.
+// In localStorage we only keep a small thumbnail DataURL for preview.
+
+const IMAGE_DB_NAME = "citywalk_project_images_v1";
+const IMAGE_STORE = "images";
+
+function openImageDB(){
+  return new Promise((resolve, reject)=>{
+    if(!("indexedDB" in window)) return reject(new Error("IndexedDB not supported"));
+    const req = indexedDB.open(IMAGE_DB_NAME, 1);
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains(IMAGE_STORE)){
+        db.createObjectStore(IMAGE_STORE, { keyPath: "id" });
+      }
+    };
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+
+async function putImageBlob(id, fileOrBlob){
+  try{
+    const db = await openImageDB();
+    await new Promise((resolve, reject)=>{
+      const tx = db.transaction(IMAGE_STORE, "readwrite");
+      tx.oncomplete = ()=> resolve();
+      tx.onerror = ()=> reject(tx.error);
+      tx.objectStore(IMAGE_STORE).put({ id, blob: fileOrBlob });
+    });
+    db.close();
+  }catch(e){
+    // If IndexedDB fails, we still fall back to thumbnail-only storage.
+    console.warn("IndexedDB put failed; falling back to thumbnail-only storage.", e);
+  }
+}
+
+async function deleteImageBlob(id){
+  if(!id) return;
+  try{
+    const db = await openImageDB();
+    await new Promise((resolve, reject)=>{
+      const tx = db.transaction(IMAGE_STORE, "readwrite");
+      tx.oncomplete = ()=> resolve();
+      tx.onerror = ()=> reject(tx.error);
+      tx.objectStore(IMAGE_STORE).delete(id);
+    });
+    db.close();
+  }catch(e){
+    // ignore
+  }
+}
+
+function makeImageId(taskId){
+  // reasonably unique, small
+  return `${taskId}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function createThumbnailDataUrl(file, maxDim = 1100, quality = 0.82){
+  // Returns a small-ish JPEG DataURL for preview/storage. Falls back to original DataURL if conversion fails.
+  try{
+    // Prefer createImageBitmap when available (faster, less memory)
+    let bitmap = null;
+    if("createImageBitmap" in window){
+      bitmap = await createImageBitmap(file);
+    }
+
+    let w, h;
+    if(bitmap){
+      w = bitmap.width; h = bitmap.height;
+    }else{
+      // fallback to HTMLImageElement
+      const dataUrl = await readFileAsDataURL(file);
+      const img = await new Promise((resolve, reject)=>{
+        const im = new Image();
+        im.onload = ()=> resolve(im);
+        im.onerror = reject;
+        im.src = dataUrl;
+      });
+      w = img.naturalWidth; h = img.naturalHeight;
+      bitmap = img;
+    }
+
+    const scale = Math.min(1, maxDim / Math.max(w, h));
+    const tw = Math.max(1, Math.round(w * scale));
+    const th = Math.max(1, Math.round(h * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = tw;
+    canvas.height = th;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, tw, th);
+
+    if(bitmap && bitmap.close) bitmap.close();
+
+    // JPEG is usually much smaller than PNG for photos
+    return canvas.toDataURL("image/jpeg", quality);
+  }catch(e){
+    return await readFileAsDataURL(file);
+  }
+}
+
+// ===== End image helpers =====
 
 function escapeHtml(str){
   return (str ?? "").toString()
