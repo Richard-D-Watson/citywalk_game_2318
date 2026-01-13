@@ -17,6 +17,41 @@
     <div id="sheetContent"></div>
   </div>
 
+  <!-- Rules Intro Modal -->
+  <div id="rulesBackdrop" class="backdrop hidden" aria-hidden="true"></div>
+  <div id="rulesModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="规则介绍">
+    <div class="modalCard">
+      <div class="modalTop">
+        <div>
+          <div class="modalTitle">规则介绍</div>
+          <div class="modalSub">玩法规则与内容预览</div>
+        </div>
+        <button id="rulesClose" class="iconBtn modalClose" aria-label="关闭">✕</button>
+      </div>
+      <div id="rulesContent"></div>
+    </div>
+  </div>
+
+  <!-- Story (Daily Summary) Modal -->
+  <div id="storyBackdrop" class="backdrop hidden" aria-hidden="true"></div>
+  <div id="storyModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="今日总结">
+    <div class="modalCard">
+      <div class="modalTop">
+        <div>
+          <div class="modalTitle">今日总结</div>
+          <div class="modalSub">翻页阅读 · 留下纪念</div>
+        </div>
+        <button id="storyClose" class="iconBtn modalClose" aria-label="关闭">✕</button>
+      </div>
+      <div id="storyPage" class="storyPage"></div>
+      <div class="storyNav">
+        <button class="btn btnGhost" id="storyPrev">上一页</button>
+        <div class="storyIndicator" id="storyIndicator">1/1</div>
+        <button class="btn btnPrimary" id="storyNext">下一页</button>
+      </div>
+    </div>
+  </div>
+
   <script src="./app.js"></script>
 </body>
 </html>
