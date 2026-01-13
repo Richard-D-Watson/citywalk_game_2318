@@ -1,9 +1,14 @@
 // City Walk 闯关 - 静态网页项目（无真实地图/无定位）
 // 数据来自 Excel 关卡表；图片当前使用占位图，可后续替换为真实路径。
 // 路由：#/map  #/scene/<id>  #/bonus/<id>  #/summary
-// 存储：localStorage（注意：上传照片 DataURL 可能较大）
+// 存储：localStorage + IndexedDB（图片 Blob 存 IndexedDB，避免存储空间不足）
 
 const STORAGE_KEY = "citywalk_project_v2";
+
+// UI overlays
+let __rulesShownOnce = false;
+let __storyPages = [];
+let __storyIndex = 0;
 
 const scenes = [
   {
@@ -13,7 +18,7 @@ const scenes = [
     "coverImageUrl": "./img/scene_1/cover.png",
     "shortDesc": "在公园里完成三处主题场景打卡，用照片收集今天的第一组回忆。",
     "longDesc": "前滩休闲公园于2015年12月31日作为前滩地区三大滨江绿地中首个开放的公园正式启用。公园沿黄浦江岸线延伸2公里，占地约60.6公顷，通过四季分明的植被景观和“生态+人文”设计理念，打造出包含樱花步道、芦苇荡等特色景观的滨江生态空间。",
-    "navigationHint": "页面顶部提供的地图能帮助你更好地定位噢～",
+    "navigationHint": "「任务1」提供的地图能帮助你更好地定位噢～",
     "unlock": { "type": "always" },
     "passRule": { "type": "anyTaskCompleted" },
     "tasks": [
@@ -105,7 +110,7 @@ const scenes = [
     "coverImageUrl": "./img/scene_3/cover.png",
     "shortDesc": "探索帐篷营地与主题彩绘，在江边绿地里寻找城市里的“神奇动物”树洞画。",
     "longDesc": "耀华滨江绿地是位于浦东新区前滩的一个绿地，东临耀江路，南临后滩公园，北临前滩友城公园。总面积约17公顷。原本为临时苗圃，2017年黄浦江两岸贯通时，临时苗圃成为耀华滨江绿地。2021年，绿地新增观赏地被和花卉数万平方米，并且在原防汛墙内侧画上“海洋缤纷”、“烂漫时光”、“林下鹿憩”、“梦幻树屋”等四大主题彩绘。2021年8月18日，耀华滨江绿地开放帐篷营地的预约功能，该地可以容纳200顶常规帐篷，也成为黄浦江东岸第一个对市民开放的帐篷露营地。",
-    "navigationHint": "茶馆在远离黄浦江的深面，小心不要遗漏啦！",
+    "navigationHint": "「任务3」茶馆在公园中位于远离黄浦江的一侧，小心不要遗漏啦！",
     "unlock": { "type": "afterScenePassed", "sceneId": "level-2" },
     "passRule": { "type": "anyTaskCompleted" },
     "tasks": [
@@ -151,7 +156,7 @@ const scenes = [
     "coverImageUrl": "./img/scene_4/cover.png",
     "shortDesc": "探访四季有花的世界花艺园，在台地园、禅境园、竹境园等特色花园中领略园艺之美。",
     "longDesc": "世界花艺园位于公园西南侧，由地面公园区域和地下配套空间组成。地面主题园由台地园、新境园、禅境园、竹境园和岩石花园等特色鲜明的花艺游园组成，打造一个四季有花可观、全年有景可赏的四季园艺精品花园。",
-    "navigationHint": "请合理安排本关时间，接下来的两个关卡都是限时开放噢！完成任意3个任务即算通关～",
+    "navigationHint": "收集全部星星可解锁「挑战」！记住每一个花艺游园的名字有助于完成「挑战」噢～",
     "unlock": { "type": "afterScenePassed", "sceneId": "level-3" },
     "passRule": { "type": "anyTaskCompleted" },
     "tasks": [
@@ -231,7 +236,7 @@ const scenes = [
     "coverImageUrl": "./img/scene_5/cover.png",
     "shortDesc": "沉浸式探访三大生态温室，在“海市沙洲”、“云上森林”和“云雾峡谷”中感受热带奇观。",
     "longDesc": "上海温室花园位于上海世博文化公园中心位置，紧邻中心湖，背靠双子山，占地约2.2万平方米，是集观赏游览、休闲娱乐为一体的多功能生态综合体。它由1个游客服务中心和1号馆海市沙洲、2号馆云上森林和3号馆云雾峡谷等三大主题场馆组成。\n三大主题场馆是根据植物的生境进行分类设置，结合建筑的空间结构，择取世界生态系统中的典型生态片段，打造热带干旱、热带湿生耐荫、热带湿生喜阳三种环境类型，分别展示热带干旱植物、热带雨林植物与热带花卉植物。展示形式上力求表现植物到“博物+文化”的延展，从而打造好看、好玩的沉浸式展览温室。",
-    "navigationHint": "本关限时开放，而且有神秘奖励！完成全部任务后解锁噢～",
+    "navigationHint": "「上海温室花园」限时入场：09:00~20:30。收集全部星星可获得神秘奖励噢～",
     "unlock": { "type": "afterScenePassed", "sceneId": "level-4" },
     "passRule": { "type": "anyTaskCompleted" },
     "tasks": [
@@ -285,7 +290,7 @@ const scenes = [
     "coverImageUrl": "./img/scene_6/cover.png",
     "shortDesc": "登顶国内首座空腔结构人工山林，在山巅俯瞰中心湖，寻找地标答案。",
     "longDesc": "双子山位于公园东南侧，占地达30万平方米，由48米高的主峰和37米高的次峰组成，山体种植7000多棵乔木，山体内部采用空腔结构，设置展厅、停车库、变电站等功能设施，是国内第一座高度超过40米的空腔结构人工仿自然山林。",
-    "navigationHint": "此关卡为限时开放，请注意时间安排噢～",
+    "navigationHint": "「双子山」限时入场：14:00~15:30。登山务必注意安全！",
     "unlock": { "type": "afterScenePassed", "sceneId": "level-5" },
     "passRule": { "type": "anyTaskCompleted" },
     "tasks": [
@@ -332,7 +337,7 @@ const scenes = [
     "coverImageUrl": "./img/scene_7/cover.png",
     "shortDesc": "漫步世博记忆花园，在时光印记大道和保留展馆中，感受从工业时代到生态文明的演进。",
     "longDesc": "世博花园位于公园北部核心景区，面积约7.2公顷，依托上海世博会四个保留场馆，以樱花环道串联精致花园、海棠花甸等景观，通过自然与文化的融合展示世博记忆。园内集中呈现各类春花植物，1公顷中心草坪四周分布有欧洲风情的精致花园、西南侧的百米紫藤长廊、北侧的白玉兰花林，形成以春花为特色的游览胜地。",
-    "navigationHint": "从双子山离开后，一路向北走，就能找到世博花园啦！注意“时光印记大道”是东西走向的，不要错过了噢～",
+    "navigationHint": "「原法国馆」限时入场：10:00~17:30。请合理规划时间噢～",
     "unlock": { "type": "afterScenePassed", "sceneId": "level-6" },
     "passRule": { "type": "anyTaskCompleted" },
     "tasks": [
@@ -379,7 +384,7 @@ const scenes = [
     "coverImageUrl": "./img/scene_8/cover.png",
     "shortDesc": "步入经典的江南园林，在“醉红映霞”、“古柯晚渡”等八景中，领略咫尺山林的东方美学意境。",
     "longDesc": "申园是上海世博文化公园中独具江南园林文化特色的园中园，总占地达5公顷。园内摄山理水、筑房建桥，总体规划形成北山、南水、东园、西苑的空间布局，山环水抱之中的建筑群落呈现明清时期江南传统园林风格。申园着力构筑醉红映霞、古柯晚渡、玉堂春满、松石泉流、曲韵天香、烟雨蓬莱、秋江落照、荷风鱼乐八景，在现代时空里，营造一座经典的江南园林，表现江南之态，传达江南之魂。咫尺山林，创一代沪上新名园、中国园林新典范。",
-    "navigationHint": "从原卢森堡馆出来后向西行走就能找到申园啦！傍晚游园更有一番风味噢～",
+    "navigationHint": "「申园」限时入场：09:00~16:30。收集全部星星可获得神秘奖励噢～",
     "unlock": { "type": "afterScenePassed", "sceneId": "level-7" },
     "passRule": { "type": "anyTaskCompleted" },
     "tasks": [
@@ -436,7 +441,7 @@ function now(){ return Date.now(); }
 
 function loadState(){
   const raw = localStorage.getItem(STORAGE_KEY);
-  if(!raw) return { startedAt:null, endedAt:null, scenes:{} };
+  if(!raw) return { startedAt:null, endedAt:null, scenes:{}, unlock:{ spent:0, version:1 } };
   try{
     const parsed = JSON.parse(raw);
 
@@ -458,9 +463,14 @@ function loadState(){
         }
       }
     }
+    // Ensure unlock card system container exists (migration-safe)
+    if(!parsed.unlock || typeof parsed.unlock !== "object") parsed.unlock = { spent:0, version:1 };
+    if(typeof parsed.unlock.spent !== "number" || !isFinite(parsed.unlock.spent) || parsed.unlock.spent < 0) parsed.unlock.spent = 0;
+    if(parsed.unlock.version !== 1) parsed.unlock.version = 1;
+
     return parsed;
   }catch(e){
-    return { startedAt:null, endedAt:null, scenes:{} };
+    return { startedAt:null, endedAt:null, scenes:{}, unlock:{ spent:0, version:1 } };
   }
 }
 function saveState(s){
@@ -479,7 +489,8 @@ function initStateIfNeeded(){
   for(const scene of scenes){
     if(!s.scenes[scene.id]){
       s.scenes[scene.id] = {
-        unlocked: scene.unlock?.type === "always",
+        // New unlock logic: all scenes start locked; use unlock cards to unlock.
+        unlocked: false,
         tasks: {},
         bonus: { done:false, updatedAt:null, values:{} }
       };
@@ -549,19 +560,44 @@ function isSceneAllTasksDone(state, scene){
 function hasBonus(scene){ return !!(scene.bonusTasks && scene.bonusTasks.length); }
 
 function computeUnlocks(state){
+  // New unlock logic: do NOT auto-unlock. Scenes are unlocked only by spending unlock cards.
+  // We keep the previous unlocked flags (migration-friendly) and only normalize them to booleans.
+  if(!state.unlock || typeof state.unlock !== "object") state.unlock = { spent:0, version:1 };
+  if(typeof state.unlock.spent !== "number" || !isFinite(state.unlock.spent) || state.unlock.spent < 0) state.unlock.spent = 0;
   for(const scene of scenes){
-    if(scene.unlock?.type === "always"){ state.scenes[scene.id].unlocked = true; continue; }
-    if(scene.unlock?.type === "afterScenePassed") {
-      const prev = scenes.find(x=>x.id===scene.unlock.sceneId);
-      state.scenes[scene.id].unlocked = prev ? isScenePassed(state, prev) : false;
-      continue;
-    }
-    state.scenes[scene.id].unlocked = false;
+    if(!state.scenes?.[scene.id]) continue;
+    state.scenes[scene.id].unlocked = !!state.scenes[scene.id].unlocked;
   }
 }
 
 function totalStars(state){ return scenes.reduce((a,s)=>a + starsForScene(state,s.id), 0); }
 function maxStars(){ return scenes.reduce((a,s)=>a + (s.tasks?.length||0), 0); }
+
+// ===== Unlock Card System =====
+// Rules:
+// - Initial: 1 unlock card
+// - Every 2 stars earned: +1 unlock card
+// - Total cards cap: 8
+// - Spend 1 card to unlock any scene; unlocked scenes stay unlocked.
+function totalUnlockCards(state){
+  const earned = Math.floor(totalStars(state) / 2);
+  return Math.min(8, 1 + earned);
+}
+function spentUnlockCards(state){
+  const spent = state?.unlock?.spent;
+  return (typeof spent === "number" && isFinite(spent) && spent > 0) ? Math.floor(spent) : 0;
+}
+function availableUnlockCards(state){
+  return Math.max(0, totalUnlockCards(state) - spentUnlockCards(state));
+}
+function spendUnlockCard(state, sceneId){
+  if(!state.unlock || typeof state.unlock !== "object") state.unlock = { spent:0, version:1 };
+  if(state.scenes?.[sceneId]?.unlocked) return true;
+  if(availableUnlockCards(state) <= 0) return false;
+  state.scenes[sceneId].unlocked = true;
+  state.unlock.spent = spentUnlockCards(state) + 1;
+  return true;
+}
 function formatDuration(ms){
   const sec = Math.max(0, Math.floor(ms/1000));
   const m = Math.floor(sec/60);
@@ -599,6 +635,125 @@ function closeSheet(){
   sheetBackdrop.setAttribute("aria-hidden", "true");
 }
 
+// ===== Rules Intro Modal =====
+const rulesBackdrop = document.getElementById("rulesBackdrop");
+const rulesModal = document.getElementById("rulesModal");
+const rulesContent = document.getElementById("rulesContent");
+const rulesCloseBtn = document.getElementById("rulesClose");
+
+function openRules(state){
+  const s = state || initStateIfNeeded();
+  rulesContent.innerHTML = renderRulesHtml(s);
+  rulesBackdrop.classList.remove("hidden");
+  rulesModal.classList.remove("hidden");
+  rulesBackdrop.setAttribute("aria-hidden", "false");
+}
+function closeRules(){
+  rulesBackdrop.classList.add("hidden");
+  rulesModal.classList.add("hidden");
+  rulesBackdrop.setAttribute("aria-hidden", "true");
+}
+
+if(rulesCloseBtn){ rulesCloseBtn.addEventListener("click", closeRules); }
+if(rulesBackdrop){ rulesBackdrop.addEventListener("click", closeRules); }
+
+function renderRulesHtml(state){
+  const total = totalStars(state);
+  const max = maxStars();
+  const unlockedCount = scenes.filter(sc=>state.scenes[sc.id]?.unlocked).length;
+  const cardTotal = totalUnlockCards(state);
+  const cardAvail = availableUnlockCards(state);
+  return `
+    <div class="card" style="box-shadow:none; border:1px solid rgba(229,231,235,.85)">
+      <h2>怎么玩？</h2>
+      <ol class="muted" style="margin:10px 0 0; padding-left:18px; line-height:1.7">
+        <li>在主页面（路线图）点击关卡，先看预览，再进入关卡；</li>
+        <li>每个关卡包含多个任务：「拍照上传」 / 「选择题 」/ 「填空题」；</li>
+        <li>完成一个任务以点亮1颗星星；</li>
+        <li>每点亮 2 颗星星可获得 1 张“解锁卡”（初值=1,上限=8），用以解锁任何一个关卡；</li>
+        <li>尽可能多地收集星星，以获得专属称号；</li>
+        <li>行程结束后进入「总结」页，生成“今日总结”。</li>
+      </ol>
+      <hr class="hr" />
+      <div class="kv">
+        <div class="item"><div class="label">当前总星</div><div class="value">${total}/${max}</div></div>
+        <div class="item"><div class="label">解锁卡</div><div class="value">${cardAvail}/${cardTotal}</div></div>
+        <div class="item"><div class="label">已解锁关卡</div><div class="value">${unlockedCount}/${scenes.length}</div></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px; box-shadow:none; border:1px solid rgba(229,231,235,.85)">
+      <h2>内容预览</h2>
+      <p class="muted">一眼看懂今天要去哪里、做什么。</p>
+      <hr class="hr" />
+      ${scenes.map(sc=>{
+        const tCount = (sc.tasks||[]).length;
+        const hasB = hasBonus(sc);
+        return `
+          <div style="padding:12px; border:1px solid #e5e7eb; border-radius:16px; background:#fff; margin-top:10px">
+            <div class="row spaceBetween">
+              <div style="font-weight:750">第 ${sc.order} 关 · ${escapeHtml(sc.title)}</div>
+              <div class="muted" style="font-size:13px">${tCount} 个任务${hasB ? " · 含挑战/奖励" : ""}</div>
+            </div>
+            <div class="muted" style="margin-top:6px">${escapeHtml(sc.shortDesc || "")}</div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+
+    <div class="card" style="margin-top:12px; box-shadow:none; border:1px solid rgba(229,231,235,.85)">
+      <h2>小贴士</h2>
+      <ul class="muted" style="margin:10px 0 0; padding-left:18px; line-height:1.7">
+        <li>部分关卡有「挑战/奖励」，收集本关全部星星后即可解锁；</li>
+        <li>部分关卡限时入场，请合理安排时间和关卡解锁顺序，详情如下；</li>
+        <li>(1) 第5关「上海温室花园」入场时间：09:00~20:30；</li>
+        <li>(2) 第6关「双子山」入场时间：14:00~15:30；</li>
+        <li>(3) 第7关「原法国馆」入场时间：10:00~17:30；</li>
+        <li>(4) 第8关「申园」入场时间：09:00~16:30；</li>
+        <li>在主页面右上角点「ⓘ」可重新打开本规则。</li>
+      </ul>
+    </div>
+  `;
+}
+
+// ===== Story (Daily Summary) Modal =====
+const storyBackdrop = document.getElementById("storyBackdrop");
+const storyModal = document.getElementById("storyModal");
+const storyPageEl = document.getElementById("storyPage");
+const storyIndicatorEl = document.getElementById("storyIndicator");
+const storyCloseBtn = document.getElementById("storyClose");
+const storyPrevBtn = document.getElementById("storyPrev");
+const storyNextBtn = document.getElementById("storyNext");
+
+function openStory(pages){
+  __storyPages = Array.isArray(pages) ? pages.filter(Boolean) : [];
+  if(!__storyPages.length) __storyPages = ["今天也要好好玩呀：先去完成几道任务再来生成总结～"];
+  __storyIndex = 0;
+  renderStoryPage();
+  storyBackdrop.classList.remove("hidden");
+  storyModal.classList.remove("hidden");
+  storyBackdrop.setAttribute("aria-hidden", "false");
+}
+function closeStory(){
+  storyBackdrop.classList.add("hidden");
+  storyModal.classList.add("hidden");
+  storyBackdrop.setAttribute("aria-hidden", "true");
+}
+function renderStoryPage(){
+  const total = __storyPages.length || 1;
+  const idx = Math.min(Math.max(__storyIndex, 0), total-1);
+  __storyIndex = idx;
+  if(storyPageEl) storyPageEl.textContent = __storyPages[idx] || "";
+  if(storyIndicatorEl) storyIndicatorEl.textContent = `${idx+1}/${total}`;
+  if(storyPrevBtn) storyPrevBtn.disabled = idx === 0;
+  if(storyNextBtn) storyNextBtn.disabled = idx >= total-1;
+}
+
+if(storyCloseBtn){ storyCloseBtn.addEventListener("click", closeStory); }
+if(storyBackdrop){ storyBackdrop.addEventListener("click", closeStory); }
+if(storyPrevBtn){ storyPrevBtn.addEventListener("click", ()=>{ __storyIndex--; renderStoryPage(); }); }
+if(storyNextBtn){ storyNextBtn.addEventListener("click", ()=>{ __storyIndex++; renderStoryPage(); }); }
+
 /* Render */
 function render(){
   if(typeof revokePreviewObjectUrls === 'function') revokePreviewObjectUrls();
@@ -633,20 +788,28 @@ function renderMap(state){
   const max = maxStars();
   const pct = max ? Math.round((total/max)*100) : 0;
   const unlockedCount = scenes.filter(s=>state.scenes[s.id].unlocked).length;
+  const cardTotal = totalUnlockCards(state);
+  const cardAvail = availableUnlockCards(state);
 
   app.innerHTML = `
-    ${layoutHeader("City Walk 闯关", `<button class="iconBtn" id="resetBtn" title="重置进度">↺</button>`)}
+    ${layoutHeader("City Walk 闯关", `
+      <div class="row gap8">
+        <button class="iconBtn" id="rulesBtn" title="规则介绍">ⓘ</button>
+        <button class="iconBtn" id="resetBtn" title="重置进度">↺</button>
+      </div>
+    `)}
     <div class="card">
       <div class="row spaceBetween">
         <div class="badges">
           <span class="badge">总星：${total}/${max}</span>
+          <span class="badge">解锁卡：${cardAvail}/${cardTotal}</span>
           <span class="badge badgeMuted">已解锁：${unlockedCount}/${scenes.length}</span>
         </div>
         <small>${pct}%</small>
       </div>
       <div style="height:10px"></div>
       <div class="progressBar"><div style="width:${pct}%"></div></div>
-      <p class="muted" style="margin-top:10px">点击关卡查看预览；完成任务会点亮星星并解锁后续关卡。</p>
+      <p class="muted" style="margin-top:10px">点击主页面右上角的「ⓘ」可查看游戏规则，加油噢～</p>
     </div>
 
     <div class="timeline">
@@ -700,6 +863,15 @@ function renderMap(state){
     location.hash = "#/summary";
   };
 
+  const rulesBtn = document.getElementById("rulesBtn");
+  if(rulesBtn) rulesBtn.onclick = ()=> openRules(loadState());
+
+  // Show rules intro once on initial entry.
+  if(!__rulesShownOnce){
+    __rulesShownOnce = true;
+    openRules(state);
+  }
+
   app.querySelectorAll(".node").forEach(el=>{
     el.addEventListener("click", ()=>{
       const sceneId = el.getAttribute("data-scene");
@@ -710,6 +882,11 @@ function renderMap(state){
 
   document.getElementById("continueBtn").onclick = ()=>{
     const unlockedScenes = scenes.filter(s=>state.scenes[s.id].unlocked);
+    if(!unlockedScenes.length){
+      // No scenes unlocked yet: guide player to unlock the first one.
+      openScenePreview(state, scenes[0]);
+      return;
+    }
     const target = unlockedScenes.find(s=>starsForScene(state, s.id) < (s.tasks?.length||0)) || unlockedScenes[unlockedScenes.length-1];
     if(target) openScenePreview(state, target, true);
   };
@@ -723,9 +900,11 @@ function openScenePreview(state, scene, autoEnter=false){
   const bonusAvailable = hasBonus(scene);
   const bonusDone = state.scenes[scene.id]?.bonus?.done;
 
-  const lockedHint = (scene.unlock?.type === "afterScenePassed") ? `完成上一关任意一个任务即可解锁。` : `尚未解锁`;
-  const btnText = unlocked ? "进入场景" : "未解锁";
-  const btnDisabled = unlocked ? "" : "disabled";
+  const cardTotal = totalUnlockCards(state);
+  const cardAvail = availableUnlockCards(state);
+  const lockedHint = `需要 1 张解锁卡解锁（当前 ${cardAvail}/${cardTotal}）。`;
+  const btnText = unlocked ? "进入场景" : "使用解锁卡解锁";
+  const btnDisabled = (unlocked || cardAvail>0) ? "" : "disabled";
 
   const bonusHtml = (unlocked && allDone && bonusAvailable)
     ? `<button class="btn btnGhost" id="openBonusBtn">${bonusDone ? "查看挑战/奖励" : "进入挑战/奖励"}</button>`
@@ -755,7 +934,28 @@ function openScenePreview(state, scene, autoEnter=false){
 
   const enterBtn = document.getElementById("enterSceneBtn");
   if(enterBtn){
-    enterBtn.onclick = ()=>{ closeSheet(); location.hash = `#/scene/${scene.id}`; };
+    enterBtn.onclick = ()=>{
+      if(state.scenes[scene.id].unlocked){
+        closeSheet();
+        location.hash = `#/scene/${scene.id}`;
+        return;
+      }
+      const st = loadState();
+      computeUnlocks(st);
+      const ok = spendUnlockCard(st, scene.id);
+      if(!ok){
+        alert("解锁卡不足：需要 1 张解锁卡才能解锁该关卡。\n提示：每获得 2 颗星星会新增 1 张解锁卡（初始赠送 1 张，上限 8 张）。");
+        return;
+      }
+      const saved = saveState(st);
+      if(!saved){
+        alert("解锁成功，但保存失败：可能是浏览器存储空间不足。\n建议删除部分任务照片后重试，或在浏览器设置中清理站点数据后重新开始。");
+        return;
+      }
+      closeSheet();
+      render();
+      location.hash = `#/scene/${scene.id}`;
+    };
     if(autoEnter && unlocked) enterBtn.click();
   }
   const bonusBtn = document.getElementById("openBonusBtn");
@@ -800,7 +1000,7 @@ function renderScene(state, sceneId){
       </div>
       <div style="height:10px"></div>
       <div class="progressBar"><div style="width:${pct}%"></div></div>
-      <p class="muted" style="margin-top:10px">完成任意一个任务即可解锁下一关；全部任务完成后会自动进入「挑战/奖励」页（如果该关有）。</p>
+      <p class="muted" style="margin-top:10px">(1)每完成 1 个任务会点亮 1 颗星星；(2)每收集 2 颗星星可获得 1 张解锁卡，可在主页面用来解锁任意关卡；(3)全部任务完成后会自动进入「挑战/奖励」页（如果本关有的话）。</p>
     </div>
 
     <div id="tasks"></div>
@@ -1059,7 +1259,7 @@ function renderBonus(state, sceneId){
         <button class="btn btnGhost" id="bonusLaterBtn">稍后再说</button>
       </div>
       <div id="bonusFeedback" class="muted" style="margin-top:10px"></div>
-      <p class="muted" style="margin-top:10px">备注：挑战/奖励页不影响解锁进度噢～</p>
+      <p class="muted" style="margin-top:10px">备注：在主页面点击本关卡，可重新进入此页面～</p>
     </div>
   `;
 
@@ -1181,6 +1381,13 @@ function renderSummary(state){
       }).join("")}
     </div>
 
+    <div class="card" style="margin-top:12px">
+      <h2>生成今日总结</h2>
+      <p class="muted">对今日行程的简短文字总结，以及作者的一些「碎碎念」～</p>
+      <div style="height:10px"></div>
+      <button class="btn btnPrimary" id="generateStoryBtn">生成今日总结</button>
+    </div>
+
     <div class="footerBar">
       <div class="footerInner">
         <button class="btn btnGhost" id="restart">重新开始</button>
@@ -1197,10 +1404,89 @@ function renderSummary(state){
     render();
   };
 
+  const genBtn = document.getElementById("generateStoryBtn");
+  if(genBtn) genBtn.onclick = ()=>{
+    const pages = buildDailyStoryPages(loadState());
+    openStory(pages);
+  };
+
   hydrateImagePreviews(document.getElementById('app'));
 }
 
+// ===== Generate daily story (paged) =====
+function buildDailyStoryPages(state){
+  const s = state || loadState();
+  const endAt = s.endedAt || now();
+  const dur = s.startedAt ? formatDuration(endAt - s.startedAt) : "—";
+  const total = totalStars(s);
+  const max = maxStars();
+  const pct = max ? Math.round((total/max)*100) : 0;
 
+  const dateStr = new Date().toLocaleDateString("zh-CN", { year:"numeric", month:"2-digit", day:"2-digit", weekday:"short" });
+  const title = pct >= 85 ? "城市观察家" : (pct >= 55 ? "路线闯关者" : "随性漫游者");
+
+  const completedScenes = scenes.filter(sc=>starsForScene(s, sc.id) > 0);
+  const bonusScenes = scenes.filter(sc=>hasBonus(sc) && s.scenes[sc.id]?.bonus?.done);
+
+  // pick a few memorable answers
+  const highlights = [];
+  for(const sc of completedScenes){
+    const st = s.scenes[sc.id];
+    for(const t of (sc.tasks||[])){
+      const slot = st?.tasks?.[t.id];
+      if(!slot?.done) continue;
+      if(t.type === "input" || t.type === "choice"){
+        const v = (slot.value ?? "").toString().trim();
+        if(v){
+          highlights.push(`在「${sc.title}」你们答了：${t.title} → ${v}`);
+        }
+      }
+      if(highlights.length >= 3) break;
+    }
+    if(highlights.length >= 3) break;
+  }
+
+  const paragraphs = [];
+  paragraphs.push(`${dateStr}\nCity Walk 今日回忆录`);
+  paragraphs.push(`\n你们今天的称号是「${title}」。\n用时：${dur}；星星：${total}/${max}（${pct}%）。`);
+
+  if(completedScenes.length){
+    paragraphs.push(`\n路线回顾：`);
+    for(const sc of completedScenes){
+      const st = starsForScene(s, sc.id);
+      const totalTasks = (sc.tasks||[]).length;
+      const bonusDone = hasBonus(sc) ? (s.scenes[sc.id]?.bonus?.done ? "挑战/奖励✅" : "挑战/奖励—") : "";
+      paragraphs.push(`- 第 ${sc.order} 关「${sc.title}」：${st}/${totalTasks}⭐ ${bonusDone}`.trim());
+    }
+  }else{
+    paragraphs.push(`\n你们还没有开始任何关卡，但没关系——这只是热身。随时可以回到主页面开始闯关。`);
+  }
+
+  if(bonusScenes.length){
+    paragraphs.push(`\n你们完成了 ${bonusScenes.length} 个「挑战/奖励」——这部分不影响通关，但很加分。`);
+  }
+
+  paragraphs.push(`\n「作者的碎碎念」\n  从考前就开始期待的hanging out终于如愿，高总辛苦啦～\n  依鄙人此前若干次和老友相聚的经验来看，每次时长超过一个下午的见面都会显得boring，为此我曾苦恼过许久；还记得考前高总提到“想给自己出个城定”，鄙人遂“灵机一动”想到这种游戏形式。最初本想在网页中嵌入一个可实时定位的地图并设置打卡点（就像上次城定一样），但考虑到项目复杂度、手机耗电等问题而放弃，转而做一个只有前端的纯静态网页。从设计构思、找素材到内容成型不过几天时间，着实体会了一把工科人“做PJ”的快乐😂\n  特别致谢ChatGPT，根据我的构思和提供的素材，完成了整个项目的全部代码，几乎下载完就可以直接运行，实在是恐怖如斯🤯最后阶段的工作be like: 把要求丢给它➡️等待15分钟➡️下载结果并运行➡️提出新的要求➡️......真可谓打工人的贤内助🫡项目已开源至"https://github.com/Richard-D-Watson/citywalk_game_2318"，觉得好玩可以给个star智齿一下lol\n  最最要致谢的是高总！游戏、程序或是美景，今天没有bro的话也将失去意义。感恩高总的陪伴，给予我这个PJ最大的价值🥹\n  仔细想想，距离大学毕业只有一年多时间，但在我的脑海中，仿佛高中的点滴就在昨日。毕业后再聚是什么时候？彼时的我们又会成为什么样子？我不去想也无法想，只知道眼下就是最好的时光。\n  祝万事顺利，期待下一次见面🥹`);
+
+  return paginateParagraphs(paragraphs, 460);
+}
+
+function paginateParagraphs(paragraphs, maxCharsPerPage = 420){
+  const pages = [];
+  let buf = "";
+  for(const p of paragraphs){
+    const piece = (p ?? "").toString();
+    const next = buf ? (buf + "\n\n" + piece) : piece;
+    if(next.length > maxCharsPerPage && buf){
+      pages.push(buf.trim());
+      buf = piece;
+    }else{
+      buf = next;
+    }
+  }
+  if(buf.trim()) pages.push(buf.trim());
+  return pages.length ? pages : ["今天也要好好玩呀：先去完成几道任务再来生成总结～"];
+}
 
 // ===== Preview helpers (ObjectURL) =====
 let __previewObjectUrls = [];
